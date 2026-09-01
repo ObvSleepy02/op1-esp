@@ -1,0 +1,200 @@
+-- ESP Script for Operation One (Roblox) - non-default avatar detection
+-- Uses character's HumanoidRootPart and custom body parts via tags/attributes
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local player = Players.LocalPlayer
+local camera = workspace.CurrentCamera
+
+-- Create ESP holders
+local espHolder = Instance.new("Folder")
+espHolder.Name = "ESP_Holder"
+espHolder.Parent = player.PlayerGui
+
+-- Function to create a box and text label for a target
+local function createESP(targetChar)
+    if not targetChar or not targetChar:IsA("Model") then return end
+    if espHolder:FindFirstChild(targetChar.Name) then return end -- already exists
+
+    local folder = Instance.new("Folder")
+    folder.Name = targetChar.Name
+    folder.Parent = espHolder
+
+    -- Bounding box (4 lines)
+    local box = Drawing.new("Square")
+    box.Visible = false
+    box.Color = Color3.new(1, 0, 0) -- red
+    box.Thickness = 2
+    box.Filled = false
+
+    -- Name tag
+    local nameTag = Drawing.new("Text")
+    nameTag.Visible = false
+    nameTag.Color = Color3.new(1, 1, 1)
+    nameTag.Size = 14
+    nameTag.Center = true
+    nameTag.Outline = true
+    nameTag.OutlineColor = Color3.new(0, 0, 0)
+
+    folder:SetAttribute("Box", box)
+    folder:SetAttribute("NameTag", nameTag)
+end
+
+-- Remove ESP for a target
+local function removeESP(targetName)
+    local folder = espHolder:FindFirstChild(targetName)
+    if folder then
+        local box = folder:GetAttribute("Box")
+        local nameTag = folder:GetAttribute("NameTag")
+        if box then box:Remove() end
+        if nameTag then nameTag:Remove() end
+        folder:Destroy()
+    end
+end
+
+-- Update ESP positions and visibility
+local function updateESP()
+    for _, otherPlayer in ipairs(Players:GetPlayers()) do
+        if otherPlayer == player then continue end
+        local char = otherPlayer.Character
+        if not char or not char.Parent then
+            removeESP(otherPlayer.Name)
+            continue
+        end
+
+        -- Ensure ESP exists
+        if not espHolder:FindFirstChild(otherPlayer.Name) then
+            createESP(char)
+        end
+
+        local folder = espHolder:FindFirstChild(otherPlayer.Name)
+        if not folder then continue end
+
+        local box = folder:GetAttribute("Box")
+        local nameTag = folder:GetAttribute("NameTag")
+        if not box or not nameTag then continue end
+
+        -- Find the primary part (could be HumanoidRootPart or custom)
+        local primaryPart = char:FindFirstChild("HumanoidRootPart")
+        if not primaryPart then
+            -- Fallback: search for any part with attribute "Primary" or largest size
+            local parts = char:GetDescendants()
+            for _, part in ipairs(parts) do
+                if part:IsA("BasePart") and part:GetAttribute("Primary") == true then
+                    primaryPart = part
+                    break
+                end
+            end
+            if not primaryPart then
+                -- take the part with greatest volume
+                local maxVol = 0
+                for _, part in ipairs(parts) do
+                    if part:IsA("BasePart") then
+                        local vol = part.Size.X * part.Size.Y * part.Size.Z
+                        if vol > maxVol then
+                            maxVol = vol
+                            primaryPart = part
+                        end
+                    end
+                end
+            end
+        end
+
+        if not primaryPart then
+            box.Visible = false
+            nameTag.Visible = false
+            continue
+        end
+
+        -- Get head for top reference (or fallback)
+        local head = char:FindFirstChild("Head")
+        if not head then
+            -- find any part above primaryPart
+            local highestY = -math.huge
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") and part.Position.Y > highestY then
+                    highestY = part.Position.Y
+                    head = part
+                end
+            end
+        end
+
+        if not head then
+            box.Visible = false
+            nameTag.Visible = false
+            continue
+        end
+
+        -- Calculate screen bounds using primaryPart and head
+        local primaryPos, onScreen1 = camera:WorldToViewportPoint(primaryPart.Position)
+        local headPos, onScreen2 = camera:WorldToViewportPoint(head.Position)
+        if not onScreen1 or not onScreen2 then
+            box.Visible = false
+            nameTag.Visible = false
+            continue
+        end
+
+        -- Estimate width based on distance and avatar scale
+        local dist = (primaryPart.Position - camera.CFrame.Position).Magnitude
+        local width = math.clamp(200 / dist * 2, 20, 150)
+        local height = math.abs(headPos.Y - primaryPos.Y) + 20
+        -- adjust height if head is lower than primary (custom avatar)
+        if headPos.Y > primaryPos.Y then
+            height = math.abs(headPos.Y - primaryPos.Y) + 10
+        else
+            height = math.abs(primaryPos.Y - headPos.Y) + 30
+        end
+
+        local x = primaryPos.X - width/2
+        local y = headPos.Y - height/2  -- top of head
+
+        -- Update box
+        box.Position = Vector2.new(x, y)
+        box.Size = Vector2.new(width, height)
+        box.Visible = true
+
+        -- Update name tag
+        nameTag.Position = Vector2.new(primaryPos.X, y - 15)
+        nameTag.Text = otherPlayer.Name .. " [" .. math.floor(dist) .. "m]"
+        nameTag.Visible = true
+    end
+
+    -- Clean up ESP for players that left
+    for _, folder in ipairs(espHolder:GetChildren()) do
+        if not Players:FindFirstChild(folder.Name) then
+            removeESP(folder.Name)
+        end
+    end
+end
+
+-- Connect to render loop
+RunService.RenderStepped:Connect(updateESP)
+
+-- Initial setup for existing players
+for _, otherPlayer in ipairs(Players:GetPlayers()) do
+    if otherPlayer ~= player and otherPlayer.Character then
+        createESP(otherPlayer.Character)
+    end
+end
+
+-- Handle new players
+Players.PlayerAdded:Connect(function(newPlayer)
+    newPlayer.CharacterAdded:Connect(function(char)
+        task.wait(0.5) -- wait for parts to load
+        createESP(char)
+    end)
+end)
+
+-- Handle character removal
+Players.PlayerRemoving:Connect(function(playerLeaving)
+    removeESP(playerLeaving.Name)
+end)
+
+-- Cleanup on reset
+player.CharacterAdded:Connect(function()
+    for _, folder in ipairs(espHolder:GetChildren()) do
+        removeESP(folder.Name)
+    end
+end)
+
+print("ESP loaded for Operation One (non-default avatars)")
