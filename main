@@ -1,5 +1,5 @@
--- OPERATION ONE ESP - FORCED BOUNDING BOX (NO HUMANOID, NO HUMANROOTPART)
--- Works on any custom mesh/part structure. Toggle with F1 or UI button.
+-- OPERATION ONE - FULL SOLID BOX ESP (NO HUMANOID, NO ROOT PART)
+-- Scans all BaseParts in character, draws a filled rectangle around them.
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -9,38 +9,13 @@ local camera = workspace.CurrentCamera
 
 local espEnabled = true
 
--- Create GUI (top-left)
-local gui = Instance.new("ScreenGui")
-gui.Name = "Op1EspGui"
-gui.Parent = player:WaitForChild("PlayerGui")
+-- Drawing objects per player
+local espData = {}
 
-local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, 180, 0, 40)
-frame.Position = UDim2.new(0, 10, 0, 10)
-frame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-frame.BackgroundTransparency = 0.4
-frame.BorderSizePixel = 1
-frame.BorderColor3 = Color3.fromRGB(255, 255, 255)
-frame.Parent = gui
-
-local btn = Instance.new("TextButton")
-btn.Size = UDim2.new(1, -10, 1, -10)
-btn.Position = UDim2.new(0, 5, 0, 5)
-btn.BackgroundColor3 = Color3.fromRGB(60, 180, 60)
-btn.Text = "ESP ON (F1)"
-btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-btn.TextScaled = true
-btn.Font = Enum.Font.SourceSansBold
-btn.BorderSizePixel = 0
-btn.Parent = frame
-
--- Drawing objects storage
-local espObjects = {}
-
-local function getCharacterParts(char)
+-- Get all BaseParts from a character (recursive)
+local function getAllParts(char)
     local parts = {}
     if not char then return parts end
-    -- Recursively get ALL BaseParts (ignores UI, tools, etc.)
     for _, obj in ipairs(char:GetDescendants()) do
         if obj:IsA("BasePart") then
             table.insert(parts, obj)
@@ -49,85 +24,89 @@ local function getCharacterParts(char)
     return parts
 end
 
-local function computeBoundingBox(parts)
+-- Compute bounding box center and size from parts
+local function getBoundingBox(parts)
     if #parts == 0 then return nil, nil end
     local minX, minY, minZ = math.huge, math.huge, math.huge
     local maxX, maxY, maxZ = -math.huge, -math.huge, -math.huge
     for _, part in ipairs(parts) do
         local pos = part.Position
-        local size = part.Size / 2
-        local x, y, z = pos.X, pos.Y, pos.Z
-        local hx, hy, hz = size.X, size.Y, size.Z
-        minX = math.min(minX, x - hx)
-        minY = math.min(minY, y - hy)
-        minZ = math.min(minZ, z - hz)
-        maxX = math.max(maxX, x + hx)
-        maxY = math.max(maxY, y + hy)
-        maxZ = math.max(maxZ, z + hz)
+        local half = part.Size / 2
+        minX = math.min(minX, pos.X - half.X)
+        minY = math.min(minY, pos.Y - half.Y)
+        minZ = math.min(minZ, pos.Z - half.Z)
+        maxX = math.max(maxX, pos.X + half.X)
+        maxY = math.max(maxY, pos.Y + half.Y)
+        maxZ = math.max(maxZ, pos.Z + half.Z)
     end
     local center = Vector3.new((minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2)
     local size = Vector3.new(maxX - minX, maxY - minY, maxZ - minZ)
     return center, size
 end
 
-local function setupESPForPlayer(playerName)
-    if espObjects[playerName] then return end
+-- Create drawing objects for a player
+local function createESP(playerName)
+    if espData[playerName] then return end
     local box = Drawing.new("Square")
     box.Visible = false
-    box.Color = Color3.fromRGB(255, 50, 50)
+    box.Color = Color3.fromRGB(255, 0, 0)
     box.Thickness = 2
-    box.Filled = false
+    box.Filled = true
+    box.Transparency = 0.3  -- semi-transparent so you can see through
+
     local label = Drawing.new("Text")
     label.Visible = false
     label.Color = Color3.fromRGB(255, 255, 255)
-    label.Size = 14
+    label.Size = 16
     label.Center = true
     label.Outline = true
     label.OutlineColor = Color3.fromRGB(0, 0, 0)
-    espObjects[playerName] = { box = box, label = label }
+
+    espData[playerName] = { box = box, label = label }
 end
 
-local function clearESP(playerName)
-    local data = espObjects[playerName]
+-- Remove drawing objects
+local function removeESP(playerName)
+    local data = espData[playerName]
     if data then
         data.box:Remove()
         data.label:Remove()
-        espObjects[playerName] = nil
+        espData[playerName] = nil
     end
 end
 
--- Main update loop
+-- Main update
 local function updateESP()
     if not espEnabled then
-        for _, data in pairs(espObjects) do
+        for _, data in pairs(espData) do
             data.box.Visible = false
             data.label.Visible = false
         end
         return
     end
 
-    local currentPlayers = Players:GetPlayers()
-    local playerNames = {}
-    for _, plr in ipairs(currentPlayers) do
+    local currentPlayers = {}
+    for _, plr in ipairs(Players:GetPlayers()) do
         if plr ~= player then
-            playerNames[plr.Name] = true
+            currentPlayers[plr.Name] = true
             local char = plr.Character
             if char and char.Parent then
                 -- Ensure ESP exists
-                if not espObjects[plr.Name] then
-                    setupESPForPlayer(plr.Name)
+                if not espData[plr.Name] then
+                    createESP(plr.Name)
                 end
-                local data = espObjects[plr.Name]
+                local data = espData[plr.Name]
                 if data then
-                    local parts = getCharacterParts(char)
-                    local center, size = computeBoundingBox(parts)
+                    local parts = getAllParts(char)
+                    local center, size = getBoundingBox(parts)
                     if center and size then
                         local screenPos, onScreen = camera:WorldToViewportPoint(center)
                         if onScreen then
                             local dist = (center - camera.CFrame.Position).Magnitude
-                            local scaleFactor = 1 / dist * 120
-                            local w = math.clamp(size.X * scaleFactor, 10, 400)
-                            local h = math.clamp(size.Y * scaleFactor, 10, 400)
+                            -- Perspective scaling
+                            local scale = 1 / dist * 150
+                            local w = math.clamp(size.X * scale, 15, 500)
+                            local h = math.clamp(size.Y * scale, 15, 500)
                             local x = screenPos.X - w / 2
                             local y = screenPos.Y - h / 2
 
@@ -135,8 +114,8 @@ local function updateESP()
                             data.box.Size = Vector2.new(w, h)
                             data.box.Visible = true
 
-                            data.label.Position = Vector2.new(screenPos.X, y - 18)
-                            data.label.Text = plr.Name .. "  [" .. math.floor(dist) .. "m]"
+                            data.label.Position = Vector2.new(screenPos.X, y - 20)
+                            data.label.Text = plr.Name .. " [" .. math.floor(dist) .. "m]"
                             data.label.Visible = true
                         else
                             data.box.Visible = false
@@ -148,83 +127,67 @@ local function updateESP()
                     end
                 end
             else
-                -- Character missing, hide ESP but keep data
-                if espObjects[plr.Name] then
-                    espObjects[plr.Name].box.Visible = false
-                    espObjects[plr.Name].label.Visible = false
+                if espData[plr.Name] then
+                    espData[plr.Name].box.Visible = false
+                    espData[plr.Name].label.Visible = false
                 end
             end
         end
     end
 
-    -- Cleanup players that left
-    for name, _ in pairs(espObjects) do
-        if not playerNames[name] then
-            clearESP(name)
+    -- Cleanup left players
+    for name in pairs(espData) do
+        if not currentPlayers[name] then
+            removeESP(name)
         end
     end
 end
 
--- Toggle function
-local function toggleESP()
-    espEnabled = not espEnabled
-    btn.Text = espEnabled and "ESP ON (F1)" or "ESP OFF (F1)"
-    btn.BackgroundColor3 = espEnabled and Color3.fromRGB(60, 180, 60) or Color3.fromRGB(180, 60, 60)
-end
-
--- Button click
-btn.MouseButton1Click:Connect(toggleESP)
-
--- Keybind F1
+-- Toggle with F1
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
     if input.KeyCode == Enum.KeyCode.F1 then
-        toggleESP()
+        espEnabled = not espEnabled
+        print(espEnabled and "ESP ON" or "ESP OFF")
     end
 end)
 
--- Connect to render loop
+-- Run every frame
 RunService.RenderStepped:Connect(updateESP)
 
 -- Initial setup for existing players
 for _, plr in ipairs(Players:GetPlayers()) do
     if plr ~= player then
-        setupESPForPlayer(plr.Name)
+        createESP(plr.Name)
     end
 end
 
--- New player joins
-Players.PlayerAdded:Connect(function(newPlayer)
-    newPlayer.CharacterAdded:Connect(function()
-        task.wait(0.3) -- wait for rig to load
-        if espObjects[newPlayer.Name] then
-            -- Already exists, just reset visibility
-        else
-            setupESPForPlayer(newPlayer.Name)
-        end
+-- New player
+Players.PlayerAdded:Connect(function(newPlr)
+    newPlr.CharacterAdded:Connect(function()
+        task.wait(0.2)
+        createESP(newPlr.Name)
     end)
-    if newPlayer.Character then
-        task.wait(0.3)
-        setupESPForPlayer(newPlayer.Name)
+    if newPlr.Character then
+        task.wait(0.2)
+        createESP(newPlr.Name)
     end
 end)
 
 -- Player leaves
-Players.PlayerRemoving:Connect(function(leavingPlayer)
-    clearESP(leavingPlayer.Name)
-end)
+Players.PlayerRemoving:Connect(removeESP)
 
--- Reset on local character change
+-- Reset on local respawn
 player.CharacterAdded:Connect(function()
-    for name, _ in pairs(espObjects) do
-        clearESP(name)
+    for name in pairs(espData) do
+        removeESP(name)
     end
-    task.wait(0.5)
+    task.wait(0.3)
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr ~= player then
-            setupESPForPlayer(plr.Name)
+            createESP(plr.Name)
         end
     end
 end)
 
-print("Operation One ESP loaded. Press F1 or click the UI button to toggle.")
+print("FULL BOX ESP LOADED. Press F1 to toggle.")
