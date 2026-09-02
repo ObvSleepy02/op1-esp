@@ -1,14 +1,14 @@
--- Operation One ESP with toggle UI (non-default avatar support)
--- Execute this script. A small GUI will appear. Click "ESP ON/OFF" to toggle.
+-- Operation One ESP - Custom character detection (no HumanoidRootPart/Head assumed)
+-- Scans for any BasePart and uses bounding box based on all parts.
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 
-local espEnabled = true  -- default on
+local espEnabled = true
 
--- Create screen GUI
+-- GUI
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "ESP_Toggle_Gui"
 screenGui.Parent = player.PlayerGui
@@ -33,13 +33,53 @@ toggleButton.Font = Enum.Font.SourceSansBold
 toggleButton.BorderSizePixel = 0
 toggleButton.Parent = frame
 
--- ESP storage
 local espHolder = Instance.new("Folder")
 espHolder.Name = "ESP_Holder"
 espHolder.Parent = player.PlayerGui
 
--- Drawing objects table
-local espData = {}  -- key = player.Name, value = {box, nameTag}
+local espData = {}
+
+-- Get all character parts (ignores accessories, particles, etc.)
+local function getCharacterParts(char)
+    local parts = {}
+    for _, child in ipairs(char:GetDescendants()) do
+        if child:IsA("BasePart") then
+            -- Filter out common non-body parts (optional)
+            local name = child.Name:lower()
+            if not name:match("handle") and not name:match("attach") and not name:match("effect") and not name:match("particle") then
+                table.insert(parts, child)
+            end
+        end
+    end
+    return parts
+end
+
+-- Compute bounding box center and size from parts
+local function getBoundingBox(char)
+    local parts = getCharacterParts(char)
+    if #parts == 0 then return nil end
+
+    local minX, minY, minZ = math.huge, math.huge, math.huge
+    local maxX, maxY, maxZ = -math.huge, -math.huge, -math.huge
+
+    for _, part in ipairs(parts) do
+        local pos = part.Position
+        local size = part.Size / 2
+        -- Get world corners (approximate)
+        local x, y, z = pos.X, pos.Y, pos.Z
+        local hx, hy, hz = size.X, size.Y, size.Z
+        minX = math.min(minX, x - hx)
+        minY = math.min(minY, y - hy)
+        minZ = math.min(minZ, z - hz)
+        maxX = math.max(maxX, x + hx)
+        maxY = math.max(maxY, y + hy)
+        maxZ = math.max(maxZ, z + hz)
+    end
+
+    local center = Vector3.new((minX + maxX)/2, (minY + maxY)/2, (minZ + maxZ)/2)
+    local size = Vector3.new(maxX - minX, maxY - minY, maxZ - minZ)
+    return center, size
+end
 
 local function createESP(targetChar)
     if not targetChar or not targetChar:IsA("Model") then return end
@@ -59,7 +99,7 @@ local function createESP(targetChar)
     nameTag.Outline = true
     nameTag.OutlineColor = Color3.new(0, 0, 0)
 
-    espData[targetChar.Name] = {box = box, nameTag = nameTag}
+    espData[targetChar.Name] = {box = box, nameTag = nameTag, lastCenter = nil, lastSize = nil}
 end
 
 local function removeESP(playerName)
@@ -73,7 +113,6 @@ end
 
 local function updateESP()
     if not espEnabled then
-        -- Hide all
         for _, data in pairs(espData) do
             if data.box then data.box.Visible = false end
             if data.nameTag then data.nameTag.Visible = false end
@@ -99,83 +138,42 @@ local function updateESP()
         local nameTag = data.nameTag
         if not box or not nameTag then continue end
 
-        -- Find primary part (HumanoidRootPart or custom)
-        local primaryPart = char:FindFirstChild("HumanoidRootPart")
-        if not primaryPart then
-            local parts = char:GetDescendants()
-            for _, part in ipairs(parts) do
-                if part:IsA("BasePart") and part:GetAttribute("Primary") == true then
-                    primaryPart = part
-                    break
-                end
-            end
-            if not primaryPart then
-                local maxVol = 0
-                for _, part in ipairs(parts) do
-                    if part:IsA("BasePart") then
-                        local vol = part.Size.X * part.Size.Y * part.Size.Z
-                        if vol > maxVol then
-                            maxVol = vol
-                            primaryPart = part
-                        end
-                    end
-                end
-            end
-        end
-
-        if not primaryPart then
+        local center, size = getBoundingBox(char)
+        if not center or not size then
             box.Visible = false
             nameTag.Visible = false
             continue
         end
 
-        local head = char:FindFirstChild("Head")
-        if not head then
-            local highestY = -math.huge
-            for _, part in ipairs(char:GetDescendants()) do
-                if part:IsA("BasePart") and part.Position.Y > highestY then
-                    highestY = part.Position.Y
-                    head = part
-                end
-            end
-        end
-
-        if not head then
+        -- Convert 3D bounding box to screen
+        local centerScreen, onScreen = camera:WorldToViewportPoint(center)
+        if not onScreen then
             box.Visible = false
             nameTag.Visible = false
             continue
         end
 
-        local primaryPos, onScreen1 = camera:WorldToViewportPoint(primaryPart.Position)
-        local headPos, onScreen2 = camera:WorldToViewportPoint(head.Position)
-        if not onScreen1 or not onScreen2 then
-            box.Visible = false
-            nameTag.Visible = false
-            continue
-        end
+        -- Estimate screen size from 3D size and distance
+        local dist = (center - camera.CFrame.Position).Magnitude
+        local scale = 1 / dist * 100  -- rough perspective factor
+        local width = size.X * scale * 1.5
+        local height = size.Y * scale * 1.5
+        width = math.clamp(width, 10, 300)
+        height = math.clamp(height, 10, 300)
 
-        local dist = (primaryPart.Position - camera.CFrame.Position).Magnitude
-        local width = math.clamp(200 / dist * 2, 20, 150)
-        local height = math.abs(headPos.Y - primaryPos.Y) + 20
-        if headPos.Y > primaryPos.Y then
-            height = math.abs(headPos.Y - primaryPos.Y) + 10
-        else
-            height = math.abs(primaryPos.Y - headPos.Y) + 30
-        end
-
-        local x = primaryPos.X - width/2
-        local y = headPos.Y - height/2
+        local x = centerScreen.X - width/2
+        local y = centerScreen.Y - height/2
 
         box.Position = Vector2.new(x, y)
         box.Size = Vector2.new(width, height)
         box.Visible = true
 
-        nameTag.Position = Vector2.new(primaryPos.X, y - 15)
+        nameTag.Position = Vector2.new(centerScreen.X, y - 15)
         nameTag.Text = otherPlayer.Name .. " [" .. math.floor(dist) .. "m]"
         nameTag.Visible = true
     end
 
-    -- Cleanup for players that left
+    -- Cleanup
     for name, _ in pairs(espData) do
         if not Players:FindFirstChild(name) then
             removeESP(name)
@@ -183,17 +181,14 @@ local function updateESP()
     end
 end
 
--- Toggle function
 toggleButton.MouseButton1Click:Connect(function()
     espEnabled = not espEnabled
     toggleButton.Text = espEnabled and "ESP ON" or "ESP OFF"
     toggleButton.BackgroundColor3 = espEnabled and Color3.new(0.2, 0.6, 0.2) or Color3.new(0.6, 0.2, 0.2)
 end)
 
--- Connect to render loop
 RunService.RenderStepped:Connect(updateESP)
 
--- Initial setup
 for _, otherPlayer in ipairs(Players:GetPlayers()) do
     if otherPlayer ~= player and otherPlayer.Character then
         createESP(otherPlayer.Character)
@@ -217,4 +212,4 @@ player.CharacterAdded:Connect(function()
     end
 end)
 
-print("ESP loaded. Toggle with GUI button.")
+print("ESP loaded - custom bounding box mode. Toggle with GUI.")
