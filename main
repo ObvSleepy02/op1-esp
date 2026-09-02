@@ -45,67 +45,63 @@ end
 
 local function updateESP()
     if not espEnabled then
-        for _, data in pairs(espData) do
-            data.box.Visible = false
-            data.label.Visible = false
+        for _, data in pairs(espFrames) do
+            data.frame.Visible = false
         end
         return
     end
 
-    local currentPlayers = {}
     for _, plr in ipairs(Players:GetPlayers()) do
-        if plr ~= player then
-            currentPlayers[plr.Name] = true
-            local char = plr.Character
-            if char and char.Parent then
-                if not espData[plr.Name] then
-                    createESP(plr.Name)
-                end
-                local data = espData[plr.Name]
-                if data then
-                    local parts = getAllParts(char)
-                    local center, size = getBoundingBox(parts)
-                    if center and size then
-                        local screenPos, onScreen = camera:WorldToViewportPoint(center)
-                        if onScreen then
-                            local dist = (center - camera.CFrame.Position).Magnitude
-                            -- ADJUST SIZE: change multiplier (currently 1.8)
-                            local scale = 1 / dist * 180
-                            local w = math.clamp(size.X * scale, 15, 500)
-                            local h = math.clamp(size.Y * scale, 15, 500)
-                            -- ADJUST VERTICAL OFFSET: negative moves up (currently -10)
-                            local verticalOffset = -10
-                            local x = screenPos.X - w / 2
-                            local y = screenPos.Y - h / 2 + verticalOffset
+        if plr == player then continue end
+        local char = plr.Character
+        if not char or not char.Parent then
+            if espFrames[plr.Name] then
+                espFrames[plr.Name].frame.Visible = false
+            end
+            continue
+        end
 
-                            data.box.Position = Vector2.new(x, y)
-                            data.box.Size = Vector2.new(w, h)
-                            data.box.Visible = true
+        if not espFrames[plr.Name] then
+            createFrame(plr.Name)
+        end
+        local data = espFrames[plr.Name]
+        if not data then continue end
 
-                            data.label.Position = Vector2.new(screenPos.X, y - 20)
-                            data.label.Text = plr.Name .. " [" .. math.floor(dist) .. "m]"
-                            data.label.Visible = true
-                        else
-                            data.box.Visible = false
-                            data.label.Visible = false
-                        end
-                    else
-                        data.box.Visible = false
-                        data.label.Visible = false
-                    end
-                end
-            else
-                if espData[plr.Name] then
-                    espData[plr.Name].box.Visible = false
-                    espData[plr.Name].label.Visible = false
+        -- Find any part to get position
+        local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("Head")
+        if not root then
+            -- search for any BasePart
+            for _, obj in ipairs(char:GetDescendants()) do
+                if obj:IsA("BasePart") then
+                    root = obj
+                    break
                 end
             end
         end
+        if not root then
+            data.frame.Visible = false
+            continue
+        end
+
+        local pos, onScreen = camera:WorldToViewportPoint(root.Position)
+        if not onScreen then
+            data.frame.Visible = false
+            continue
+        end
+
+        local dist = (root.Position - camera.CFrame.Position).Magnitude
+        local size = math.clamp(300 / dist * 2, 20, 150)
+
+        data.frame.Position = UDim2.new(0, pos.X - size/2, 0, pos.Y - size/2)
+        data.frame.Size = UDim2.new(0, size, 0, size)
+        data.frame.Visible = true
+        data.label.Text = plr.Name .. " [" .. math.floor(dist) .. "m]"
     end
 
-    for name in pairs(espData) do
-        if not currentPlayers[name] then
-            removeESP(name)
+    -- cleanup
+    for name in pairs(espFrames) do
+        if not Players:FindFirstChild(name) then
+            removeFrame(name)
         end
     end
 end
